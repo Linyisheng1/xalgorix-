@@ -125,6 +125,33 @@ func GetClientFor(rawProxy string) (*http.Client, error) {
 	return NewClient(p, defaultManager.timeoutOrDefault())
 }
 
+// GetClientForTarget returns an *http.Client appropriate for the given target URL.
+// If the target is a private/local address (e.g., 192.168.x.x, 10.x.x.x, localhost),
+// it returns a direct client that bypasses the proxy. Otherwise, it returns
+// a proxy-enabled client if proxying is configured.
+func GetClientForTarget(targetURL string) (*http.Client, error) {
+	if defaultManager == nil {
+		return http.DefaultClient, nil
+	}
+	
+	// If proxying is disabled, return the shared no-proxy client
+	if !defaultManager.enabled {
+		return defaultManager.client, nil
+	}
+	
+	// Check if target is a private/internal address that should bypass proxy
+	if shouldBypassProxy(targetURL) {
+		return defaultManager.client, nil
+	}
+	
+	// Otherwise, use the proxy
+	p := GetProxy()
+	if p == nil {
+		return defaultManager.client, nil
+	}
+	return NewClient(p, defaultManager.timeoutOrDefault())
+}
+
 func (m *Manager) timeoutOrDefault() time.Duration {
 	if m == nil || m.timeout == 0 {
 		return 30 * time.Second

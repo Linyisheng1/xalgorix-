@@ -21,6 +21,83 @@ import (
 	"time"
 )
 
+// isPrivateIP checks if an IP address belongs to a private/internal network range.
+// These addresses should bypass the proxy since proxies typically can't reach them.
+func isPrivateIP(ip net.IP) bool {
+	if ip.IsLoopback() {
+		return true
+	}
+	if ip.IsLinkLocalUnicast() {
+		return true
+	}
+	
+	// Check private IP ranges:
+	// 10.0.0.0/8
+	if ip[0] == 10 {
+		return true
+	}
+	// 172.16.0.0/12 (172.16.0.0 to 172.31.255.255)
+	if ip[0] == 172 && ip[1] >= 16 && ip[1] <= 31 {
+		return true
+	}
+	// 192.168.0.0/16
+	if ip[0] == 192 && ip[1] == 168 {
+		return true
+	}
+	// 169.254.0.0/16 (APIPA)
+	if ip[0] == 169 && ip[1] == 254 {
+		return true
+	}
+	// IPv6 private ranges
+	if ip.To16() != nil && ip.To4() == nil {
+		// fc00::/7 unique local addresses
+		if len(ip) >= 1 && ip[0]&0xfe == 0xfc {
+			return true
+		}
+		// ::1/128 loopback
+		if ip.Equal(net.IPv6loopback) {
+			return true
+		}
+		// fe80::/10 link-local
+		if len(ip) >= 2 && ip[0] == 0xfe && ip[1] == 0x80 {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldBypassProxy returns true if the target URL should bypass the proxy.
+// This includes local addresses, private networks, and localhost.
+func shouldBypassProxy(targetURL string) bool {
+	if targetURL == "" {
+		return false
+	}
+	
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return false
+	}
+	
+	// Handle localhost variations
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	
+	// Check if it's a private IP address
+	ip := net.ParseIP(host)
+	if ip != nil && isPrivateIP(ip) {
+		return true
+	}
+	
+	// Check for .local domains (mDNS/Bonjour)
+	if strings.HasSuffix(host, ".local") {
+		return true
+	}
+	
+	return false
+}
+
 // ProxyType represents the type of proxy.
 type ProxyType string
 

@@ -5559,6 +5559,11 @@ func (s *Server) sendSimpleEmbed(color int, title, description string) {
 // isBlockedTarget checks whether a target resolves to a local, loopback, or internal
 // IP address. This prevents the agent from inadvertently scanning the host machine.
 func isBlockedTarget(target string) bool {
+        // Check if local scan is allowed via environment variable
+        if os.Getenv("XALGORIX_ALLOW_LOCAL_SCAN") == "true" {
+                return false
+        }
+
 	// Strip scheme if present (http://127.0.0.1 → 127.0.0.1)
 	host := target
 	if u, err := url.Parse(target); err == nil && u.Host != "" {

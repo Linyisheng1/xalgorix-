@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -309,6 +310,65 @@ func getChromiumPath() (string, error) {
 	return path, nil
 }
 
+// isPrivateTarget checks if a URL targets a private/internal network address.
+// Returns true if the target should bypass proxies.
+func isPrivateTarget(targetURL string) bool {
+	if targetURL == "" {
+		return false
+	}
+
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		return false
+	}
+
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			return true
+		}
+		// 10.0.0.0/8
+		if ip[0] == 10 {
+			return true
+		}
+		// 172.16.0.0/12
+		if ip[0] == 172 && ip[1] >= 16 && ip[1] <= 31 {
+			return true
+		}
+		// 192.168.0.0/16
+		if ip[0] == 192 && ip[1] == 168 {
+			return true
+		}
+		// 169.254.0.0/16 (APIPA)
+		if ip[0] == 169 && ip[1] == 254 {
+			return true
+		}
+		// IPv6 private ranges
+		if ip.To16() != nil && ip.To4() == nil {
+			if len(ip) >= 1 && ip[0]&0xfe == 0xfc { // fc00::/7
+				return true
+			}
+			if ip.Equal(net.IPv6loopback) {
+				return true
+			}
+			if len(ip) >= 2 && ip[0] == 0xfe && ip[1] == 0x80 { // fe80::/10
+				return true
+			}
+		}
+	}
+
+	if strings.HasSuffix(host, ".local") {
+		return true
+	}
+
+	return false
+}
+
 // extractExtension writes the embedded extension files to disk so Chrome
 // can load them via --load-extension. Returns the extension directory path.
 // Files are only re-written if the directory doesn't exist or manifest changed.
@@ -357,7 +417,7 @@ func extractExtension() (string, error) {
 	return extDir, nil
 }
 
-func ensureBrowser(ctxID, proxy string) error {
+func ensureBrowser(ctxID, proxy, targetURL string) error {
 	s := getBrowserStoreByID(ctxID)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -405,11 +465,20 @@ func ensureBrowser(ctxID, proxy string) error {
 			Set("disable-extensions-except", extDir)
 	}
 
-	if proxy == "caido" {
+	// Check if target is a private/internal address that should bypass proxy
+	useProxy := proxy != "" && proxy != "none"
+	if useProxy && targetURL != "" {
+		if isPrivateTarget(targetURL) {
+			log.Printf("[browser] Target is private/internal address, bypassing proxy for: %s", targetURL)
+			useProxy = false
+		}
+	}
+
+	if useProxy && proxy == "caido" {
 		caidoPort := detectCaidoPort()
 		ln = ln.Set("proxy-server", fmt.Sprintf("http://127.0.0.1:%d", caidoPort)).
 			Set("ignore-certificate-errors", "true")
-	} else if proxy != "" && proxy != "none" {
+	} else if useProxy && proxy != "" && proxy != "none" {
 		ln = ln.Set("proxy-server", proxy).
 			Set("ignore-certificate-errors", "true")
 	}
@@ -503,7 +572,7 @@ func browserActionWithContext(ctxID string, args map[string]string) (tools.Resul
 
 func launchBrowser(ctxID, rawURL, proxy string) (tools.Result, error) {
 	s := getBrowserStoreByID(ctxID)
-	if err := ensureBrowser(ctxID, proxy); err != nil {
+	if err := ensureBrowser(ctxID, proxy, rawURL); err != nil {
 		return tools.Result{}, err
 	}
 
